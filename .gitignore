@@ -1,0 +1,53 @@
+# Environment & API keys
+.env
+.env.*
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# MedRAG data & vectors
+backend/chroma_db/
+backend/data/*.pdf
+backend/data/*.json
+!backend/data/.gitkeep
+chroma_db/
+
+# Node & Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.vercel
+node_modules/
+.next/
+out/
+
+# IDE / System
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
