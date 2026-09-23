@@ -15,26 +15,62 @@ genai.configure(
 )
 
 MODELS_TO_TRY = [
-    "gemini-3.6-flash",
     "gemini-flash-lite-latest",
+    "gemini-flash-latest",
+    "gemini-3.6-flash",
     "gemini-2.5-flash",
 ]
 
-def generate_with_fallback(prompt: str, stream: bool = False):
+def generate_with_fallback(prompt: str):
     """
-    Attempts generation with primary model and falls back automatically if quota is hit.
+    Attempts non-streaming generation across prioritized models and falls back automatically if quota is hit.
     """
     last_err = None
     for model_name in MODELS_TO_TRY:
         try:
             m = genai.GenerativeModel(model_name)
-            res = m.generate_content(prompt, stream=stream)
+            res = m.generate_content(prompt)
             return res
         except Exception as e:
             last_err = e
             logger.warning(f"Model {model_name} failed: {e}. Trying fallback...")
             continue
     raise last_err
+
+
+def stream_with_fallback(prompt: str):
+    """
+    Tries candidate models for streaming. Peeks at the first chunk to catch any immediate
+    quota/429 error before yielding, falling back to the next model seamlessly.
+    """
+    last_err = None
+    for model_name in MODELS_TO_TRY:
+        try:
+            m = genai.GenerativeModel(model_name)
+            response = m.generate_content(prompt, stream=True)
+            iterator = iter(response)
+            first_chunk = next(iterator)
+
+            def token_generator():
+                try:
+                    if hasattr(first_chunk, "text") and first_chunk.text:
+                        yield first_chunk.text
+                except Exception:
+                    pass
+                for chunk in iterator:
+                    try:
+                        if hasattr(chunk, "text") and chunk.text:
+                            yield chunk.text
+                    except (ValueError, AttributeError):
+                        continue
+
+            return token_generator()
+        except Exception as e:
+            last_err = e
+            logger.warning(f"Streaming with model {model_name} failed: {e}. Trying fallback...")
+            continue
+    raise last_err
+
 
 
 # ------------------------------------------------------------------
@@ -120,7 +156,7 @@ USER FOLLOW-UP QUESTION:
 STANDALONE QUESTION:"""
 
     try:
-        response = generate_with_fallback(prompt, stream=False)
+        response = generate_with_fallback(prompt)
         rewritten = response.text.strip() if response and response.text else question
         # If the model echoed extra quotes or prefixes, clean them
         if rewritten.lower().startswith("standalone question:"):
@@ -247,7 +283,7 @@ def ask_medrag(question: str, collection_name: str = "langchain", chat_history: 
     sources = build_sources_list(scored_docs)
     prompt = build_final_prompt(question, context, chat_history)
 
-    response = generate_with_fallback(prompt, stream=False)
+    response = generate_with_fallback(prompt)
 
     return {
         "answer": response.text,
@@ -274,13 +310,8 @@ def ask_medrag_stream(
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources, 'standalone_query': standalone_query})}\n\n"
 
         # Stream LLM tokens with fallback
-        response = generate_with_fallback(prompt, stream=True)
-        for chunk in response:
-            try:
-                if chunk.text:
-                    yield f"data: {json.dumps({'type': 'token', 'token': chunk.text})}\n\n"
-            except (ValueError, AttributeError):
-                continue
+        for text_token in stream_with_fallback(prompt):
+            yield f"data: {json.dumps({'type': 'token', 'token': text_token})}\n\n"
 
         # Emit completion signal
         yield f"data: {json.dumps({'type': 'done'})}\n\n"

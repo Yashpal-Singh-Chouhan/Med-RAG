@@ -15,28 +15,49 @@ if api_key:
 CHROMA_PERSIST_DIR = "./chroma_db"
 GEMINI_EMBEDDING_MODEL = "models/gemini-embedding-001"
 
-class GeminiEmbeddings(Embeddings):
+import time
+import logging
 
+logger = logging.getLogger("medrag-ingest")
+
+class GeminiEmbeddings(Embeddings):
     """
     Lightweight, cloud-native embeddings using the Gemini API.
-    Zero local memory footprint (runs comfortably in under 80MB on Render's 512MB free tier).
+    Zero local memory footprint with automatic backoff for free-tier rate limits.
     """
     def __init__(self, model_name: str = GEMINI_EMBEDDING_MODEL):
         self.model_name = model_name
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        # Process in batches of 40 to stay well within API payload limits
         embeddings = []
-        batch_size = 40
+        batch_size = 50
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            res = genai.embed_content(model=self.model_name, content=batch)
-            embeddings.extend(res["embedding"])
+            for attempt in range(4):
+                try:
+                    res = genai.embed_content(model=self.model_name, content=batch)
+                    embeddings.extend(res["embedding"])
+                    break
+                except Exception as e:
+                    if "429" in str(e) and attempt < 3:
+                        logger.warning(f"Rate limited during embedding batch {i}, retrying in 5s (attempt {attempt + 1})...")
+                        time.sleep(5)
+                    else:
+                        raise
+            time.sleep(0.2)
         return embeddings
 
     def embed_query(self, text: str) -> list[float]:
-        res = genai.embed_content(model=self.model_name, content=text)
-        return res["embedding"]
+        for attempt in range(4):
+            try:
+                res = genai.embed_content(model=self.model_name, content=text)
+                return res["embedding"]
+            except Exception as e:
+                if "429" in str(e) and attempt < 3:
+                    time.sleep(3)
+                else:
+                    raise
+
 
 _embeddings = None
 
