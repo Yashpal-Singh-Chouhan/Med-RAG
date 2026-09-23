@@ -14,9 +14,28 @@ genai.configure(
     api_key=os.getenv("GEMINI_API_KEY")
 )
 
-model = genai.GenerativeModel(
-    "gemini-2.5-flash"
-)
+MODELS_TO_TRY = [
+    "gemini-3.6-flash",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+]
+
+def generate_with_fallback(prompt: str, stream: bool = False):
+    """
+    Attempts generation with primary model and falls back automatically if quota is hit.
+    """
+    last_err = None
+    for model_name in MODELS_TO_TRY:
+        try:
+            m = genai.GenerativeModel(model_name)
+            res = m.generate_content(prompt, stream=stream)
+            return res
+        except Exception as e:
+            last_err = e
+            logger.warning(f"Model {model_name} failed: {e}. Trying fallback...")
+            continue
+    raise last_err
+
 
 # ------------------------------------------------------------------
 # System prompt — the heart of medical RAG safety
@@ -101,7 +120,7 @@ USER FOLLOW-UP QUESTION:
 STANDALONE QUESTION:"""
 
     try:
-        response = model.generate_content(prompt)
+        response = generate_with_fallback(prompt, stream=False)
         rewritten = response.text.strip() if response and response.text else question
         # If the model echoed extra quotes or prefixes, clean them
         if rewritten.lower().startswith("standalone question:"):
@@ -228,7 +247,7 @@ def ask_medrag(question: str, collection_name: str = "langchain", chat_history: 
     sources = build_sources_list(scored_docs)
     prompt = build_final_prompt(question, context, chat_history)
 
-    response = model.generate_content(prompt)
+    response = generate_with_fallback(prompt, stream=False)
 
     return {
         "answer": response.text,
@@ -254,11 +273,14 @@ def ask_medrag_stream(
         # Emit initial metadata with sources & reformulated query
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources, 'standalone_query': standalone_query})}\n\n"
 
-        # Stream LLM tokens
-        response = model.generate_content(prompt, stream=True)
+        # Stream LLM tokens with fallback
+        response = generate_with_fallback(prompt, stream=True)
         for chunk in response:
-            if chunk.text:
-                yield f"data: {json.dumps({'type': 'token', 'token': chunk.text})}\n\n"
+            try:
+                if chunk.text:
+                    yield f"data: {json.dumps({'type': 'token', 'token': chunk.text})}\n\n"
+            except (ValueError, AttributeError):
+                continue
 
         # Emit completion signal
         yield f"data: {json.dumps({'type': 'done'})}\n\n"

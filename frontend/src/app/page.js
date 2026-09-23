@@ -585,15 +585,49 @@ export default function Home() {
                 };
               });
             } else if (parsed.type === "error") {
-              throw new Error(parsed.message || "Failed during streaming");
+              const errMsg = parsed.message || "Failed during response generation";
+              accumulatedContent = `⚠️ *${errMsg}*`;
+              setConversations((prev) => {
+                const docMsgs = prev[selectedDocId] || [];
+                return {
+                  ...prev,
+                  [selectedDocId]: docMsgs.map((m) =>
+                    m.id === tempAiId
+                      ? { ...m, content: accumulatedContent, sources: receivedSources }
+                      : m
+                  ),
+                };
+              });
+              addToast(errMsg, "error");
             }
           } catch (jsonErr) {
             // ignore malformed SSE line
           }
         }
       }
+
+      // If stream ended without text content
+      if (!accumulatedContent) {
+        setConversations((prev) => {
+          const docMsgs = prev[selectedDocId] || [];
+          return {
+            ...prev,
+            [selectedDocId]: docMsgs.map((m) =>
+              m.id === tempAiId && !m.content
+                ? {
+                    ...m,
+                    content:
+                      "I could not find specific details for this query in the retrieved document passages. Try rephrasing or asking about a particular section.",
+                    sources: receivedSources,
+                  }
+                : m
+            ),
+          };
+        });
+      }
     } catch (err) {
       addToast(err.message || "Something went wrong. Is the backend running?", "error");
+
       // Remove failed placeholder or update with error notice
       setConversations((prev) => {
         const docMsgs = prev[selectedDocId] || [];
